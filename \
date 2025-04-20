@@ -7,14 +7,14 @@ from PyQt5.QtCore import QThread, pyqtSignal
 class Player(QThread):
     update = pyqtSignal(object)
 
-    def __init__(self, board, gui):
+    def __init__(self, pieces, board, gui):
         self.board = board
         self.chosen_move = None
         self.gui = gui
         super().__init__()
 
     def run(self):
-        pieces = self.gui.get_pieces()
+        pieces = gui.get_pieces()
         for row in pieces:
             for piece in row:
                 if piece is not None:

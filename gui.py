@@ -6,7 +6,8 @@ from PyQt5.QtGui import QBrush, QColor, QIcon, QPixmap
 from PyQt5.QtWidgets import (QApplication, QDialog, QFrame,
                              QGraphicsPixmapItem, QGraphicsRectItem,
                              QGraphicsScene, QGridLayout, QHBoxLayout, QLabel,
-                             QPushButton, QVBoxLayout, QWidget)
+                             QMessageBox, QPushButton, QVBoxLayout, QWidget,
+                             qApp)
 
 
 def load_piece_dict():
@@ -22,8 +23,9 @@ def load_piece_dict():
 
 
 class ChessPiece(QGraphicsPixmapItem):
-    def __init__(self, pixmap, board, row, col, color):
+    def __init__(self, pixmap, board, row, col, color, reverse=False):
         super().__init__(pixmap, None)
+        self.is_reversed = reverse
         self.color = color
         self.setTransformationMode(Qt.SmoothTransformation)
         self.piece_dict = load_piece_dict()
@@ -47,8 +49,7 @@ class ChessPiece(QGraphicsPixmapItem):
         super().mouseReleaseEvent(event)
         self.board.lowlite_squares(self.targets())
         new_pos = self.pos()
-        col = normalize_position(new_pos.x(), self.board.square_width)
-        row = normalize_position(new_pos.y(), self.board.square_height)
+        row, col = self.get_row_col(new_pos)
         for mv in self.moves:
             m_row, m_col = (7 - mv.to_square // 8, mv.to_square % 8)
             if m_row == row and m_col == col:
@@ -62,6 +63,13 @@ class ChessPiece(QGraphicsPixmapItem):
                 return
         self.set_square(self.curr_pos[0], self.curr_pos[1])
 
+    def get_row_col(self, pos):
+        col = normalize_position(pos.x(), self.board.square_width)
+        row = normalize_position(pos.y(), self.board.square_height)
+        if self.is_reversed:
+            return (7 - row, 7 - col)
+        return (row, col)
+
     def clear_moves(self):
         self.setFlag(QGraphicsPixmapItem.ItemIsMovable, False)
         self.moves = []
@@ -72,7 +80,10 @@ class ChessPiece(QGraphicsPixmapItem):
     def set_square(self, row, col):
         w = self.board.square_width
         h = self.board.square_height
-        self.setPos(col * w, row * h)
+        if self.is_reversed:
+            self.setPos((7 - col) * w, (7 - row) * h)
+        else:
+            self.setPos(col * w, row * h)
 
     def get_promotion_mv(self, start, target):
         prom_choice = choose_promotion(self.color)
@@ -86,6 +97,9 @@ class ChessPiece(QGraphicsPixmapItem):
         row, col = self.curr_pos
         return (7 - row) * 8 + col
 
+    def refresh_pos(self):
+        self.set_square(self.curr_pos[0], self.curr_pos[1])
+
 
 def normalize_position(pos, div):
     pos = round(pos, -2) // div
@@ -94,23 +108,34 @@ def normalize_position(pos, div):
 
 
 class GuiBoard(QGraphicsScene):
-    def __init__(self, width, height, super_board, engine):
+    def __init__(self, width, height):
         super().__init__()
-        self.moving = "player"
-        self.staying = "engine"
         self.width = width
         self.height = height
         self.square_height = height // 8
         self.square_width = width // 8
-        self.engine = engine
         self.pieces = [[None for _ in range(8)] for _ in range(8)]
+        self.is_reversed = False
 
-        self._load_piece_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
         self.piece_dict = load_piece_dict()
         self._render_squares()
-        self._render_pieces()
-        self.super_board = super_board
         self.last_move = None
+
+    def reverse(self):
+        self.is_reversed = not self.is_reversed
+        for row in self.pieces:
+            for piece in row:
+                if piece is not None:
+                    piece.is_reversed = self.is_reversed
+                    piece.refresh_pos()
+        self.lowlite_squares(list(range(64)))
+        if self.last_move is not None:
+            self.highlite_last_move(self.last_move)
+
+    def end_game(self, reason):
+        self._clear_pieces()
+        QMessageBox.information(None, "Game Over", reason)
+        qApp.quit()
 
     def _render_squares(self):
         self.squares = [[None for _ in range(8)] for _ in range(8)]
@@ -129,6 +154,7 @@ class GuiBoard(QGraphicsScene):
                 self.squares[row][col] = rect
 
     def load_fen(self, fen):
+        self._clear_pieces()
         piece_fen = fen.split(" ")[0]
         self._load_piece_fen(piece_fen)
         self._render_pieces()
@@ -162,60 +188,30 @@ class GuiBoard(QGraphicsScene):
                     Qt.SmoothTransformation,
                 )
                 color = "w" if piece.isupper() else "b"
-                piece = ChessPiece(scaled, self, row, col, color)
+                piece = ChessPiece(scaled, self, row, col, color, self.is_reversed)
                 self.addItem(piece)
                 self.pieces[row][col] = piece
 
     def _clear_pieces(self):
         for row in self.pieces:
-            for piece in self.pieces:
+            for piece in row:
                 if piece is not None:
                     self.removeItem(piece)
         self.pieces = [[None for _ in range(8)] for _ in range(8)]
 
-    def load_moves(self, moves):
-        for mv in moves:
-            (row, col) = (7 - mv.from_square // 8, mv.from_square % 8)
-            self.pieces[row][col].load_move(mv)
-
     def highlite_squares(self, squares):
         for sq in squares:
-            (row, col) = (7 - sq // 8, sq % 8)
+            (row, col) = self.sq_to_row_col(sq)
             color = "pink" if (row + col) % 2 == 0 else "red"
             brush = QBrush(QColor(color))
             self.squares[row][col].setBrush(brush)
 
     def lowlite_squares(self, squares):
         for sq in squares:
-            (row, col) = (7 - sq // 8, sq % 8)
+            (row, col) = self.sq_to_row_col(sq)
             color = "white" if (row + col) % 2 == 0 else "#61262a"
             brush = QBrush(QColor(color))
             self.squares[row][col].setBrush(brush)
-
-    def clear_moves(self):
-        for row in range(0, 8):
-            for col in range(0, 8):
-                if self.pieces[row][col]:
-                    self.pieces[row][col].clear_moves()
-
-    def del_piece(self, row, col):
-        piece = self.pieces[row][col]
-        self.removeItem(piece)
-        self.pieces[row][col] = None
-        del piece
-
-    def add_piece(self, row, col, piece):
-        pixmap = self.piece_dict[piece]
-        scaled = pixmap.scaled(
-            self.width // 8,
-            self.height // 8,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        color = "w" if piece.isupper() else "b"
-        piece = ChessPiece(scaled, self, row, col, color)
-        self.addItem(piece)
-        self.pieces[row][col] = piece
 
     def highlite_last_move(self, new_move):
         if self.last_move is not None:
@@ -224,66 +220,19 @@ class GuiBoard(QGraphicsScene):
             self.lowlite_squares([start, target])
         start, target = (new_move.from_square, new_move.to_square)
         for sq in [start, target]:
-            row, col = 7 - sq // 8, sq % 8
+            row, col = self.sq_to_row_col(sq)
             color = "lightyellow" if (row + col) % 2 == 0 else "gold"
             brush = QBrush(QColor(color))
             self.squares[row][col].setBrush(brush)
         self.last_move = new_move
 
-    def make_move(self, move):
-        t_row, t_col = 7 - move.to_square // 8, move.to_square % 8
-        s_row, s_col = 7 - move.from_square // 8, move.from_square % 8
-        if (self.pieces[t_row][t_col]) is not None:
-            self.del_piece(t_row, t_col)
-        self.pieces[t_row][t_col] = self.pieces[s_row][s_col]
-        self.pieces[t_row][t_col].set_square(t_row, t_col)
-        self.pieces[s_row][s_col] = None
-        from_sq = move.from_square
-        to_sq = move.to_square
-        if self.super_board.is_en_passant(move):
-            if to_sq > from_sq:
-                self.del_piece(t_row + 1, t_col)
-            else:
-                self.del_piece(t_row - 1, t_col)
-        if move.promotion is not None:
-            self.del_piece(t_row, t_col)
-            self.add_piece(t_row, t_col, move.ch)
-        if self.super_board.is_castling(move):
-            if self.super_board.is_kingside_castling(move):
-                rook_start = to_sq + 1
-                rook_target = to_sq - 1
-            else:
-                rook_start = to_sq - 2
-                rook_target = to_sq + 1
-            rs_row, rs_col = 7 - rook_start // 8, rook_start % 8
-            rt_row, rt_col = 7 - rook_target // 8, rook_target % 8
-            self.pieces[rt_row][rt_col] = self.pieces[rs_row][rs_col]
-            self.pieces[rs_row][rs_col] = None
-            self.pieces[rt_row][rt_col].set_square(rt_row, rt_col)
-
-        self.super_board.push(move)
-        self.highlite_last_move(move)
-        self.clear_moves()
-        self.moving, self.staying = self.staying, self.moving
-        self.run()
-
-    def run(self):
-        self.moving.start()
-
-    def ask_engine(self):
-        result = self.engine.play(self.super_board, chess.engine.Limit(depth=5))
-        self.make_move(result.move)
+    def sq_to_row_col(self, sq):
+        if self.is_reversed:
+            sq = 63 - sq
+        return (7 - sq // 8, sq % 8)
 
     def get_pieces(self):
         return self.pieces
-
-    def set_moving(self, worker):
-        worker.update.connect(self.make_move)
-        self.moving = worker
-
-    def set_staying(self, worker):
-        worker.update.connect(self.make_move)
-        self.staying = worker
 
 
 class PromotionDialog(QDialog):
