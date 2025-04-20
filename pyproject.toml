@@ -1,0 +1,13 @@
+[project]
+name = "fishing-pond"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cairosvg>=2.7.1",
+    "pillow>=11.1.0",
+    "pyqt5>=5.15.11",
+    "python-chess>=1.999",
+    "tk>=0.1.0",
+]
